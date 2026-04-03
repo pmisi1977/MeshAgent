@@ -21,6 +21,7 @@ limitations under the License.
 #include "microstack/ILibAsyncServerSocket.h"
 #include "microstack/ILibProcessPipe.h"
 #include <sys/wait.h>
+#include <errno.h>
 #include <limits.h>
 #include <time.h>
 
@@ -103,7 +104,7 @@ typedef struct _XkbStateNotifyEvent
 } XkbStateNotifyEvent;
 
 int curcursor = KVM_MouseCursor_HELP;
-int SLAVELOG = 0;
+int SLAVELOG = 1;
 
 int SCREEN_NUM = 0;
 int SCREEN_WIDTH = 0;
@@ -490,6 +491,27 @@ void enumerate_monitors(Display *dpy)
 		}
 	}
 	xrandr_exports->XRRFreeScreenResources(res);
+
+	// Sort monitors left-to-right by X coordinate, then top-to-bottom by Y
+	for (i = 0; i < MONITOR_COUNT - 1; i++)
+	{
+		int j;
+		for (j = i + 1; j < MONITOR_COUNT; j++)
+		{
+			if (g_monitors[j].x < g_monitors[i].x || (g_monitors[j].x == g_monitors[i].x && g_monitors[j].y < g_monitors[i].y))
+			{
+				monitor_info tmp = g_monitors[i];
+				g_monitors[i] = g_monitors[j];
+				g_monitors[j] = tmp;
+			}
+		}
+	}
+
+	if (logFile) { fprintf(logFile, "enumerate_monitors: found %d monitors\n", MONITOR_COUNT); fflush(logFile); }
+	for (i = 0; i < MONITOR_COUNT; i++)
+	{
+		if (logFile) { fprintf(logFile, "  monitor %d: x=%d y=%d w=%d h=%d\n", i+1, g_monitors[i].x, g_monitors[i].y, g_monitors[i].width, g_monitors[i].height); fflush(logFile); }
+	}
 }
 
 void getAvailableDisplays(unsigned short **array, int *len)
@@ -539,6 +561,7 @@ void kvm_send_display_list()
 	}
 	((unsigned short*)buffer)[i + 3] = (unsigned short)htons((unsigned short)CURRENT_DISPLAY_ID);	// Current display
 
+	if (logFile) { fprintf(logFile, "kvm_send_display_list: sending %d displays, MONITOR_COUNT=%d, CURRENT_DISPLAY_ID=%d\n", len, MONITOR_COUNT, CURRENT_DISPLAY_ID); fflush(logFile); }
 	ignore_result(write(slave2master[1], buffer, ILibMemory_Size(buffer)));
 
 	// 3.8: Also send display info with monitor positions/sizes
@@ -1591,7 +1614,10 @@ void* kvm_relay_restart(int paused, void *processPipeMgr, ILibKVM_WriteHandler w
 		close(slave2master[0]);
 		close(master2slave[1]);
 
-		if (SLAVELOG != 0) { logFile = fopen("/tmp/slave", "w"); }
+		// Force debug logging (SLAVELOG is overwritten to 0 by agentcore.c:ILibSimpleDataStore_Get)
+		SLAVELOG = 1;
+		logFile = fopen("/tmp/slave", "w");
+		if (logFile) { fprintf(logFile, "SLAVE STARTED pid=%d uid=%d SLAVELOG_was=%d\n", getpid(), getuid(), SLAVELOG); fflush(logFile); }
 		if (uid != 0) { ignore_result(setuid(uid)); }
 
 		if (g_ILibCrashDump_path != NULL)
